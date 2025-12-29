@@ -1,7 +1,20 @@
 #include <Arduino.h>
+#include <WiFiClientSecure.h>
+#include <ArduinoOTA.h>
+
+#if defined(ESP32)
+#include <ESPmDNS.h>
+#include <WiFiMulti.h>
+WiFiMulti wifiMulti;
+#define DEVICE "ESP32"
+#elif defined(ESP8266)
 #include <ESP8266HTTPClient.h>
 #include <ESP8266WiFi.h>
-#include <WiFiClientSecure.h>
+// #include <ESP8266WiFiMulti.h>
+// ESP8266WiFiMulti wifiMulti;
+#define DEVICE "ESP8266"
+#endif
+
 
 #include "secrets.h"
 
@@ -10,6 +23,8 @@
 
 // InfluxDB write interval (seconds)
 const uint32_t WRITE_INTERVAL = 5;
+volatile bool isOtaInProgress = false;
+bool otaInProgress = false;
 
 void connectWiFi() {
   Serial.print("Connecting to Wi-Fi");
@@ -26,7 +41,22 @@ void connectWiFi() {
   Serial.println();
   Serial.print("Connected, IP=");
   Serial.println(WiFi.localIP());
+
+  // Start OTA
+  Serial.println("Starting ArduinoOTA...");
+  ArduinoOTA.begin();
+  Serial.println("ArduinoOTA started, listening on port 3232");
+  ArduinoOTA.onStart([]() {
+    Serial.println("OTA Update Start");
+    otaInProgress = true;  // Set flag to pause readings
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("OTA Update End");
+    otaInProgress = false;  // Resume readings
+  });
 }
+
+
 
 String influxUrl() {
   String url = String(INFLUXDB_URL) + "/api/v2/write?org=" + INFLUXDB_ORG +
@@ -82,11 +112,23 @@ void setup() {
   delay(100);
 
   pinMode(DIGITAL_PIN, INPUT_PULLUP);
+  WiFi.setHostname("GasDetector");
+  ArduinoOTA.setHostname("GasDetector");
 
   connectWiFi();
 }
 
 void loop() {
+  ArduinoOTA.handle();  // Handle OTA updates
+  if (otaInProgress) {
+    return;
+  }
+
+  if (isOtaInProgress) {
+    // During OTA, only process OTA handler to minimize interference
+    return;  // Skip all other code
+  }
+
   static uint32_t lastWrite = 0;
   uint32_t now = millis() / 1000;
   if (now - lastWrite >= WRITE_INTERVAL) {
